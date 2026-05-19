@@ -440,8 +440,25 @@ def main():
                 # 敵機が停止状態に入ったら，intervalに応じて爆弾投下
                 bombs.add(Bomb(emy, bird))
 
-        if pg.sprite.spritecollideany(bird, emys):
-            return
+        for emy in pg.sprite.spritecollide(bird, emys, False):
+            emy.hp -= 1
+            if emy.hp <= 0:
+                emys.remove(emy)
+                exps.add(Explosion(emy, 100))
+                score.value += 10
+            life.num -= 1
+            bird.change_img(8, screen)
+            score.update(screen)
+            life.update(screen)
+            pg.display.update()
+            if life.num < 1:
+                game_over_font = pg.font.Font(None, 100)
+                game_over_img = game_over_font.render("GAME OVER", True, (255, 255, 255))
+                game_over_rect = game_over_img.get_rect(center=(WIDTH // 2, HEIGHT // 2))
+                screen.blit(game_over_img, game_over_rect)
+                pg.display.update()
+                time.sleep(2)
+                return
 
         for obj in emys:
             obj.rect.x -= scroll
