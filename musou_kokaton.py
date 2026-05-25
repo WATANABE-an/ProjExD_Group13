@@ -5,6 +5,7 @@ import sys
 import time
 import pygame as pg
 
+pg.mixer.init()
 
 WIDTH = 1100  # ゲームウィンドウの幅
 HEIGHT = 650  # ゲームウィンドウの高さ
@@ -421,6 +422,15 @@ def main():
                 life.num = min(life.num + 1, 5)
                 score.value += 50
                 stage += 1
+
+                if stage == 2:
+                    pg.mixer.music.load(f"fig/music.mp3")
+                    pg.mixer.music.set_volume(0.4) #音量調整
+                    pg.mixer.music.play(-1) #無限ループ
+                elif stage == 3:
+                    # ステージ2が終わってステージ3に入ったらBGMを止める
+                    pg.mixer.music.stop()
+
                 stage_clear = False
                 stage_title_life = 60
                 bird.rect.center = (900, 400)
