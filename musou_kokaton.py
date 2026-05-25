@@ -3,6 +3,7 @@ import os
 import random
 import sys
 import time
+from types import SimpleNamespace
 import pygame as pg
 
 
@@ -231,6 +232,35 @@ class NeoBeam(Beam):
             beams.append(Beam(bird, angle0))
         return beams
 
+
+class Bit(pg.sprite.Sprite):
+    """
+    自機の軌跡を遅れて追従する支援機（ビット）
+    """
+    def __init__(self, delay_frames: int = 16):
+        super().__init__()
+        self.image = pg.Surface((32, 32), pg.SRCALPHA)
+        # 三角形のビットを描画（反転：右向き）
+        pg.draw.polygon(self.image, (120, 255, 255), [(28, 16), (4, 6), (4, 26)])
+        pg.draw.polygon(self.image, (40, 120, 255), [(24, 16), (8, 10), (8, 22)], 2)
+        self.rect = self.image.get_rect()
+        self.rect.center = (140, HEIGHT // 2)
+        self.delay_frames = delay_frames
+        self.dire = (+1, 0)
+
+    def update(self, trail: list[tuple[int, int]]):
+        if len(trail) > self.delay_frames:
+            tx, ty = trail[-self.delay_frames]
+            # 追従が滑らかに見えるよう線形補間で移動
+            cx, cy = self.rect.center
+            nx = cx + (tx - cx) * 0.35
+            ny = cy + (ty - cy) * 0.35
+            self.rect.center = (int(nx), int(ny))
+            dx, dy = tx - cx, ty - cy
+            if abs(dx) + abs(dy) > 0.1:
+                norm = math.hypot(dx, dy)
+                self.dire = (dx / norm, dy / norm)
+
 class Explosion(pg.sprite.Sprite):
     """
     爆発に関するクラス
@@ -264,7 +294,8 @@ class Enemy(pg.sprite.Sprite):
     敵機に関するクラス
     """
     imgs = [pg.image.load(f"fig/alien{i}.png") for i in range(1, 4)]
-    
+    img2 = pg.image.load(f"fig/plane.png")
+
     def __init__(self):
         super().__init__()
         self.image = pg.transform.rotozoom(random.choice(__class__.imgs), 0, 0.8)
@@ -286,7 +317,7 @@ class Enemy(pg.sprite.Sprite):
             self.vx = 0
             self.state = "stop"
         self.rect.move_ip(self.vx, self.vy)
-
+        
 
 def spawn_enemy(stage: int, tmr: int, emys: pg.sprite.Group):
     """
@@ -298,9 +329,40 @@ def spawn_enemy(stage: int, tmr: int, emys: pg.sprite.Group):
         if tmr % interval == 0: # tmrがintervalの倍数のときに敵機をスポーンさせる
             emys.add(Enemy())
         # ここにステージごとのスポーン条件を追加していく
-    # elif stage == 2:
-        #     if tmr % 15
-        #         emys.add(EnemyX())
+    elif stage == 2:
+        if tmr % 100 == 0:  # ステージ2では敵が少なめ
+            emys.add(Enemy())
+
+
+class Boss(pg.sprite.Sprite):
+    """
+    画面外から登場し、定位置到達後は右端で停止して攻撃するボス。
+    """
+    def __init__(self):
+        super().__init__()
+        # 指定画像を読み込む（ファイルは fig/boss2.png を想定）
+        img = pg.image.load("fig/boss2.png")
+        # 画像を元サイズの約1/10に縮小
+        img = pg.transform.rotozoom(img, 0, 0.1)
+        self.image = img
+        self.rect = self.image.get_rect()
+        # 画面外（右）から入場開始
+        self.rect.left = WIDTH + 40
+        self.rect.centery = HEIGHT // 2
+        self.target_right = WIDTH - 20
+        self.entry_speed = 6
+        self.entering = True
+        self.interval = random.randint(60, 120)  # 爆弾投下の間隔（フレーム）
+        self.hp = 25
+        
+    def update(self):
+        # 画面外から定位置まで移動し、到達後は停止
+        if self.entering:
+            self.rect.x -= self.entry_speed
+            if self.rect.right <= self.target_right:
+                self.rect.right = self.target_right
+                self.entering = False
+
 
 class Score:
     """
@@ -351,11 +413,22 @@ def main():
     pg.display.set_caption("真！こうかとん無双")
     screen = pg.display.set_mode((WIDTH, HEIGHT))
     bg_imgs = [pg.image.load(path).convert() for path in backgroundImg]
+    # BGMファイルのパスを探す
+    bgm_path = None
+    if os.path.exists("fig/妖怪バトル！！.mp3"):
+        bgm_path = "fig/妖怪バトル！！.mp3"
+    try:
+        pg.mixer.init()
+    except Exception as e:
+        print("mixer init failed:", e)
+        bgm_path = None
+    bgm_playing = False
     score = Score()
 
     bird = Bird(3, (900, 400))
     bombs = pg.sprite.Group()
     beams = pg.sprite.Group()
+    bits = pg.sprite.Group()
     exps = pg.sprite.Group()
     emys = pg.sprite.Group()
     life = Life(3)
@@ -366,8 +439,25 @@ def main():
     stage_clear = False
     stage_title_life = 0
     bg_x = 0
+    boss = None  # ボスはステージ2で生成
+    # ボス出現遅延（フレーム数）。デフォルト600フレーム（約12秒）
+    BOSS_SPAWN_DELAY = 600
+
+    # スキル関連（ステージクリア後に選択）
+    SKILL_OPTIONS = [
+        ("Life +1", "残機を1増やす"),
+        ("Speed +3", "移動速度を3増やす"),
+        ("Bit", "三角ビットが軌跡追従し一緒に攻撃"),
+    ]
+    neo_beam_num = 5  # NeoBeamのデフォルト数（スキルで変更可能）
+    bit_enabled = False
+    bird_trail: list[tuple[int, int]] = []
+    TRAIL_MAX = 120
+    selecting_skills = False
+    selected_skill = None
 
     tmr = 0
+    stage_tmr = 0
     clock = pg.time.Clock()
     while True:
         key_lst = pg.key.get_pressed()
@@ -375,18 +465,53 @@ def main():
             if event.type == pg.QUIT:
                 return 0
 
-            if stage_clear and event.type == pg.KEYDOWN and event.key == pg.K_q:
-                life.num = min(life.num + 1, 5)
-                score.value += 50
-                stage += 1
-                stage_clear = False
-                stage_title_life = 60
-                bird.rect.center = (900, 400)
-                for emy in emys:
-                    emy.rect.x -= 120
-                for item in items:
-                    item.rect.x -= 120
-                bg_x = 0
+            if stage_clear and event.type == pg.KEYDOWN:
+                # スキル選択中の入力処理（3択から1つのみ選択）
+                if event.key == pg.K_1:
+                    selecting_skills = True
+                    selected_skill = 0
+                elif event.key == pg.K_2:
+                    selecting_skills = True
+                    selected_skill = 1
+                elif event.key == pg.K_3:
+                    selecting_skills = True
+                    selected_skill = 2
+                elif event.key == pg.K_q and selected_skill is not None:
+                    # 確定して次ステージへ
+                    # スキル適用（単一選択）
+                    if selected_skill == 0:  # Life +1
+                        life.num = min(life.num + 1, 5)
+                    elif selected_skill == 1:  # Speed +3
+                        bird.speed += 3
+                    elif selected_skill == 2:  # Bit
+                        if not bit_enabled:
+                            bit_enabled = True
+                            bit = Bit(delay_frames=16)
+                            bit.rect.center = bird.rect.center
+                            bits.add(bit)
+
+                    # 従来のクリア処理（回復＋次ステージへ）
+                    life.num = min(life.num + 1, 5)
+                    score.value += 50
+                    stage += 1
+                    stage_clear = False
+                    selecting_skills = False
+                    selected_skill = None
+                    stage_title_life = 60
+                    stage_tmr = 0
+                    if stage == 2:
+                        bird.rect.center = (200, 400)
+                    else:
+                        bird.rect.center = (900, 400)
+                    emys.empty()
+                    bombs.empty()
+                    beams.empty()
+                    items.empty()
+                    exps.empty()
+                    if boss:
+                        boss.kill()
+                        boss = None
+                    bg_x = 0
                 continue
 
             if stage_clear:
@@ -394,11 +519,30 @@ def main():
 
             if event.type == pg.KEYDOWN and event.key == pg.K_SPACE:
                 if event.mod & pg.KMOD_LSHIFT: #発動条件：左Shiftキーを押下しながらスペースキー
-                    beams.add(*NeoBeam(bird, 5).gen_beams(bird))  # Shift+スペースで複数方向にビームを放つ
+                    beams.add(*NeoBeam(bird, neo_beam_num).gen_beams(bird))  # Shift+スペースで複数方向にビームを放つ
                 else:
                     beams.add(Beam(bird))  # スペースキーでビームを放つ
+                if bit_enabled:
+                    for bit in bits:
+                        # Bit は常に右方向にビームを撃つようにする
+                        dummy = SimpleNamespace(dire=(1, 0), rect=bit.rect)
+                        beams.add(Beam(dummy))
 
         bg_img = bg_imgs[(stage - 1) % len(bg_imgs)]
+        # ステージ2のときだけBGMを再生し、離脱時に停止する
+        if bgm_path:
+            try:
+                if stage == 2 and not bgm_playing:
+                    pg.mixer.music.load(bgm_path)
+                    pg.mixer.music.set_volume(0.4)
+                    pg.mixer.music.play(-1)
+                    bgm_playing = True
+                elif stage != 2 and bgm_playing:
+                    pg.mixer.music.stop()
+                    bgm_playing = False
+            except Exception as e:
+                print("BGM control failed:", e)
+                bgm_playing = False
         bg_x = (bg_x - scroll) % WIDTH
         screen.blit(bg_img, (bg_x - WIDTH, 0))
         screen.blit(bg_img, (bg_x, 0))
@@ -407,15 +551,32 @@ def main():
             overlay = pg.Surface((WIDTH, HEIGHT), pg.SRCALPHA)
             overlay.fill((0, 0, 0, 160))
             screen.blit(overlay, (0, 0))
-            font = pg.font.Font(None, 54)
-            lines = [
-                f"STAGE {stage} CLEAR",
-                "Press Q to heal and go next stage",
-            ]
-            for i, text in enumerate(lines):
+            font = pg.font.Font(None, 40)
+            title_font = pg.font.Font(None, 64)
+            title = title_font.render(f"STAGE {stage} CLEAR", True, (255, 255, 255))
+            title_rect = title.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 160))
+            screen.blit(title, title_rect)
+
+            if not selecting_skills:
+                hint = font.render("Choose 1 skill with keys 1-3, then press Q to confirm", True, (255, 255, 255))
+            else:
+                hint = font.render("Selected one skill. Press Q to confirm.", True, (255, 255, 255))
+            hint_rect = hint.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 120))
+            screen.blit(hint, hint_rect)
+
+            # スキルリスト表示
+            for i, (name, desc) in enumerate(SKILL_OPTIONS):
+                y = HEIGHT // 2 - 40 + i * 50
+                selected = "[x]" if i == selected_skill else "[ ]"
+                text = f"{i+1}. {selected} {name} - {desc}"
                 img = font.render(text, True, (255, 255, 255))
-                rect = img.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 30 + i * 50))
+                rect = img.get_rect(center=(WIDTH // 2, y))
                 screen.blit(img, rect)
+
+            count = font.render(f"Selected: {1 if selected_skill is not None else 0}/1", True, (255, 255, 255))
+            count_rect = count.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 120))
+            screen.blit(count, count_rect)
+
             pg.display.update()
             clock.tick(30)
             continue
@@ -427,6 +588,9 @@ def main():
             screen.blit(img, rect)
             stage_title_life -= 1
         
+        # ステージ2で一定時間経過後にボスをスポーン
+        if stage == 2 and boss is None and stage_tmr > BOSS_SPAWN_DELAY:
+            boss = Boss()
 
         spawn_enemy(stage, tmr, emys)
         if tmr%260 == 0:
@@ -471,6 +635,13 @@ def main():
         for obj in items:
             obj.rect.x -= scroll
 
+        # ボスの更新（出現時は画面外から移動）
+        if boss:
+            boss.update()
+            # 定位置到達後にボスが爆弾を投下する
+            if (not boss.entering) and tmr % boss.interval == 0:
+                bombs.add(Bomb(boss, bird))
+
         for item in pg.sprite.spritecollide(bird, items, True):
             life.num = min(life.num + 1, 5)
             score.value += 20
@@ -482,6 +653,16 @@ def main():
                 exps.add(Explosion(emy, 100))  # 爆発エフェクト
                 score.value += 10  # 10点アップ
                 bird.change_img(6, screen)  # こうかとん喜びエフェクト
+
+        # ボスとビームの当たり判定
+        if boss:
+            for beam in pg.sprite.spritecollide(boss, beams, True):
+                boss.hp -= 1
+                exps.add(Explosion(boss, 100))  # 爆発エフェクト
+                score.value += 50  # 50点アップ
+                bird.change_img(6, screen)  # こうかとん喜びエフェクト
+                if boss.hp <= 0:
+                    stage_clear = True
 
         for bomb in pg.sprite.groupcollide(bombs, beams, True, True).keys():  # ビームと衝突した爆弾リスト
             exps.add(Explosion(bomb, 50))  # 爆発エフェクト
@@ -502,15 +683,46 @@ def main():
                     if life.num<1:
                         time.sleep(2)
                         return
+
+        # ボスとこうかとんの当たり判定
+        if boss:
+            if pg.sprite.spritecollide(bird, [boss], False):
+                if bird.state == "invincible":
+                    exps.add(Explosion(boss, 50))  # 爆発エフェクト
+                    score.value += 1  # 1点アップ
+                else:
+                    life.num -= 1  # ライフが一つ減る
+                    bird.change_img(8, screen)  # こうかとん悲しみエフェクト
+                    score.update(screen)
+                    life.update(screen)
+                    pg.display.update()
+                    if life.num < 1:
+                        time.sleep(2)
+                        return
         
-        if tmr % 1800 == 0 and tmr > 0:
+        # ステージクリア条件
+        if bird.rect.left <= 0:
+            if stage != 2:  # ステージ2ではボス撃墜でクリア
+                stage_clear = True
+        
+        if stage != 2 and tmr % 1800 == 0 and tmr > 0:  # ステージ2では時間制限でのクリアは無効
             stage_clear = True
 
         bird.update(key_lst, screen, score)
+        bird_trail.append(bird.rect.center)
+        if len(bird_trail) > TRAIL_MAX:
+            bird_trail.pop(0)
+        bits.update(bird_trail)
+        bits.draw(screen)
         beams.update()
         beams.draw(screen)
         emys.update()
         emys.draw(screen)
+        
+        # ボスの描画（右端に固定）
+        if boss:
+            screen.blit(boss.image, boss.rect)
+        
         bombs.update()
         bombs.draw(screen)
         items.update()
@@ -521,11 +733,16 @@ def main():
         life.update(screen)
         pg.display.update()
         tmr += 1
+        stage_tmr += 1
         clock.tick(50)
 
 
 if __name__ == "__main__":
     pg.init()
     main()
+    try:
+        pg.mixer.music.stop()
+    except Exception:
+        pass
     pg.quit()
     sys.exit()
