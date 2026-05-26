@@ -404,6 +404,11 @@ def main():
     life = Life(5)
     items = pg.sprite.Group()
 
+    beam_sound = pg.mixer.Sound("fig/freesound_community.mp3")
+    beam_sound.set_volume(0.2)
+    exp_sound = pg.mixer.Sound("fig/soundreality.mp3")
+    exp_sound.set_volume(0.2)
+
     stage = 1
     scroll = 2
     stage_clear = False
@@ -445,6 +450,8 @@ def main():
                 continue
 
             if event.type == pg.KEYDOWN and event.key == pg.K_SPACE:
+                if stage == 2:
+                    beam_sound.play(maxtime=1000)
                 if event.mod & pg.KMOD_LSHIFT: #発動条件：左Shiftキーを押下しながらスペースキー
                     beams.add(*NeoBeam(bird, 5).gen_beams(bird))  # Shift+スペースで複数方向にビームを放つ
                 else:
@@ -499,6 +506,8 @@ def main():
         for emy in pg.sprite.spritecollide(bird, emys, False):
             emy.hp -= 1
             if emy.hp <= 0:
+                if stage == 2:
+                    exp_sound.play()
                 emys.remove(emy)
                 exps.add(Explosion(emy, 100))
                 score.value += 10
@@ -534,6 +543,8 @@ def main():
         for emy in pg.sprite.groupcollide(emys, beams, False, True).keys():  # ビームと衝突した敵機リスト
             emy.hp -= 1
             if emy.hp <= 0:
+                if stage == 2:
+                    exp_sound.play()
                 emys.remove(emy)
                 exps.add(Explosion(emy, 100))  # 爆発エフェクト
                 score.value += 10  # 10点アップ
@@ -542,6 +553,8 @@ def main():
         for bomb in pg.sprite.groupcollide(bombs, beams, True, True).keys():  # ビームと衝突した爆弾リスト
             exps.add(Explosion(bomb, 50))  # 爆発エフェクト
             score.value += 1  # 1点アップ
+            if stage == 2:
+                exp_sound.play()
         
 
         for bomb in pg.sprite.spritecollide(bird, bombs, True):  # こうかとんと衝突した爆弾リスト
