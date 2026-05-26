@@ -332,7 +332,9 @@ class Enemy2(pg.sprite.Sprite):
             self.kill()
 
 class Stage2_Boss(pg.sprite.Sprite):
-
+    """
+    ステージ2のボスに関するクラス
+    """
     def __init__(self):
         super().__init__()
         self.image = pg.transform.rotozoom(pg.image.load("fig/ufo_01.png"), 0, 0.4)
