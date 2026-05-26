@@ -331,6 +331,24 @@ class Enemy2(pg.sprite.Sprite):
         if self.rect.right < 0: # 画面外（左端）に出たら消滅
             self.kill()
 
+class Stage2_Boss(pg.sprite.Sprite):
+
+    def __init__(self):
+        super().__init__()
+        self.image = pg.transform.rotozoom(pg.image.load("fig/ufo_01.png"), 0, 0.4)
+        self.rect = self.image.get_rect()
+        self.rect.center = WIDTH - 100, HEIGHT // 2  #最初から右側に配置
+        self.vy = 4  #上下移動の速さ
+        self.hp = 10
+        self.interval = 50
+        self.state = "active"
+
+    def update(self):
+        self.rect.y += self.vy
+        #画面の上下で跳ね返る
+        if self.rect.top < 0 or self.rect.bottom > HEIGHT:
+            self.vy *= -1
+
 def spawn_enemy(stage: int, tmr: int, emys: pg.sprite.Group):
     """
     ステージごとの条件に応じて敵機をスポーンさせる。
@@ -408,6 +426,8 @@ def main():
     beam_sound.set_volume(0.2)
     exp_sound = pg.mixer.Sound("fig/stage2_explosion_sound.mp3")
     exp_sound.set_volume(0.2)
+    emys = pg.sprite.Group()
+    boss = None
 
     stage = 1
     scroll = 2
@@ -427,6 +447,7 @@ def main():
                 life.num = min(life.num + 1, 5)
                 score.value += 50
                 stage += 1
+                tmr = 0
 
                 if stage == 2:
                     pg.mixer.music.load(f"fig/stage2_music.mp3")
@@ -486,13 +507,23 @@ def main():
             screen.blit(img, rect)
             stage_title_life -= 1
         
+        if boss is None:
+           spawn_enemy(stage, tmr, emys)
 
-        spawn_enemy(stage, tmr, emys)
         if tmr%260 == 0:
             items.add(Item())
 
         if bird.rect.left <= 0:
             stage_clear = True
+        
+        # tmrが500になったらボスを1体だけ生成
+        if stage == 2 and tmr == 500 and boss is None:
+            boss = Stage2_Boss()
+
+        # ボスが存在するときだけ、更新して描画
+        if boss:
+            boss.update()
+            screen.blit(boss.image, boss.rect)
 
         for emy in emys:
             if emy.state == "stop" and tmr%emy.interval == 0:
@@ -502,6 +533,9 @@ def main():
             elif isinstance(emy, Enemy2):
                 if tmr % emy.interval == 0:
                     bombs.add(Bomb(emy, bird))
+
+        if boss and tmr % boss.interval == 0:
+            bombs.add(Bomb(boss, bird))
 
         for emy in pg.sprite.spritecollide(bird, emys, False):
             emy.hp -= 1
@@ -535,6 +569,8 @@ def main():
             obj.rect.x -= scroll
         for obj in items:
             obj.rect.x -= scroll
+        if boss:
+            pass
 
         for item in pg.sprite.spritecollide(bird, items, True):
             life.num = min(life.num + 1, 5)
@@ -571,6 +607,15 @@ def main():
                     if life.num<1:
                         time.sleep(2)
                         return
+        
+        if boss and pg.sprite.spritecollide(boss, beams, True):
+            boss.hp -= 1
+            exp_sound.play(maxtime=100)
+            if boss.hp <= 0:  
+                exp_sound.play()               
+                exps.add(Explosion(boss, 400)) # 爆発音
+                boss = None  # ボス消滅
+                stage_clear = True  
         
         if tmr % 1800 == 0 and tmr > 0:
             stage_clear = True
